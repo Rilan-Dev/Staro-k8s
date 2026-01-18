@@ -1,0 +1,32 @@
+# Role to allow managing Ingresses and Certificates in the tenant namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tenant-domain-provisioner
+  namespace: prod-staro-modular
+rules:
+  # Ingress management (Networking API)
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  
+  # Certificate checking (Cert-Manager API)
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch"]
+
+---
+# Bind the Role to the Django ServiceAccount from the prod-backend namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: django-tenant-provisioner-binding
+  namespace: prod-staro-modular
+subjects:
+  - kind: ServiceAccount
+    name: django-api
+    namespace: prod-backend
+roleRef:
+  kind: Role
+  name: tenant-domain-provisioner
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,74 @@
+# =====================================================
+# STARO MODULAR - PRODUCTION NAMESPACES
+# Multi-Tenant SaaS Platform
+# =====================================================
+# These namespaces provide logical isolation for different
+# components of the platform. Labels enable network policies
+# and resource quotas to function correctly.
+# =====================================================
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-staro-modular
+  labels:
+    environment: production
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: frontend
+    kubernetes.io/metadata.name: prod-staro-modular
+    # Enable Istio sidecar injection if using service mesh
+    # istio-injection: enabled
+  annotations:
+    description: "Frontend application for Staro Modular SaaS platform"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-backend
+  labels:
+    environment: production
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: backend
+    kubernetes.io/metadata.name: prod-backend
+  annotations:
+    description: "Django API, Celery workers, and Redis for Staro Modular"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-database
+  labels:
+    environment: production
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+    kubernetes.io/metadata.name: prod-database
+  annotations:
+    description: "PostgreSQL database and PgBouncer connection pooler"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    environment: production
+    app.kubernetes.io/name: observability
+    kubernetes.io/metadata.name: observability
+  annotations:
+    description: "Monitoring, logging, and tracing infrastructure"
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-system
+  labels:
+    environment: production
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: tenant-operator
+    kubernetes.io/metadata.name: tenant-system
+  annotations:
+    description: "Tenant lifecycle management operator and CRDs"

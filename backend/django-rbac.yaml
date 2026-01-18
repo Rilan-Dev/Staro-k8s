@@ -1,0 +1,97 @@
+# =====================================================
+# DJANGO RBAC FOR KUBERNETES INGRESS MANAGEMENT
+# Allows Django pods to create/manage Ingress resources
+# for custom domain provisioning
+# =====================================================
+
+---
+# Service Account for Django API pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: django-api
+  namespace: prod-backend
+  labels:
+    app: django-api
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: backend
+
+---
+# ClusterRole with permissions to manage Ingress and Certificates
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ingress-manager
+  labels:
+    app.kubernetes.io/name: staro-modular
+rules:
+  # Ingress management for custom domains
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Certificate status checking
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "certificaterequests"]
+    verbs: ["get", "list", "watch"]
+  
+  # Secrets for TLS certificates (read-only)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+    # Optional: restrict to TLS secrets only via resourceNames
+
+---
+# Bind the ClusterRole to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: django-ingress-manager
+  labels:
+    app.kubernetes.io/name: staro-modular
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ingress-manager
+subjects:
+  - kind: ServiceAccount
+    name: django-api
+    namespace: prod-backend
+
+---
+# Role for namespace-scoped operations (optional, more restrictive)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ingress-manager
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+
+---
+# RoleBinding for namespace-scoped access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: django-ingress-manager
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ingress-manager
+subjects:
+  - kind: ServiceAccount
+    name: django-api
+    namespace: prod-backend

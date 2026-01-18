@@ -1,0 +1,35 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  annotations:
+    meta.helm.sh/release-name: kube-prometheus-stack
+    meta.helm.sh/release-namespace: observability
+  creationTimestamp: "2026-01-09T18:45:49Z"
+  generation: 1
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/instance: kube-prometheus-stack
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: prometheus-node-exporter
+    app.kubernetes.io/part-of: prometheus-node-exporter
+    app.kubernetes.io/version: 1.10.2
+    helm.sh/chart: prometheus-node-exporter-4.51.0
+    release: kube-prometheus-stack
+  name: kube-prometheus-stack-prometheus-node-exporter
+  namespace: observability
+  resourceVersion: "3407829"
+  uid: 7dd8808e-b9a8-43be-b490-f61024278b35
+spec:
+  attachMetadata:
+    node: false
+  endpoints:
+  - port: http-metrics
+    relabelings:
+    - targetLabel: job
+      replacement: node-exporter
+    scheme: http
+  jobLabel: jobLabel
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: kube-prometheus-stack
+      app.kubernetes.io/name: prometheus-node-exporter

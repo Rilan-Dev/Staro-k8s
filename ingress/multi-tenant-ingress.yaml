@@ -1,0 +1,219 @@
+# =====================================================
+# MULTI-TENANT INGRESS CONFIGURATION
+# Fixed: Removed configuration-snippet (disabled by NGINX admin)
+# Uses standard annotations instead
+# =====================================================
+
+---
+# ClusterIssuer for DNS-01 challenge (for wildcard certificates)
+# Required for *.ostechnologies.info
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod-dns
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: cert-manager
+spec:
+  acme:
+    email: admin@ostechnologies.info
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-dns-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            email: admin@ostechnologies.info
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - "ostechnologies.info"
+
+---
+# Wildcard certificate for all tenant subdomains
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-ostechnologies-tls
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: certificate
+spec:
+  secretName: wildcard-ostechnologies-tls
+  issuerRef:
+    name: letsencrypt-prod-dns
+    kind: ClusterIssuer
+  commonName: "*.ostechnologies.info"
+  dnsNames:
+    - "*.ostechnologies.info"
+    - "ostechnologies.info"
+  duration: 2160h
+  renewBefore: 360h
+
+---
+# Main Ingress for platform and tenant subdomains
+# FIXED: Removed configuration-snippet, using standard proxy headers
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: staro-platform
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: ingress
+  annotations:
+    # NGINX configuration - NO configuration-snippet
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    
+    # Rate limiting per tenant
+    nginx.ingress.kubernetes.io/limit-rpm: "600"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    
+    # Use X-Forwarded headers (standard way)
+    nginx.ingress.kubernetes.io/use-forwarded-headers: "true"
+    nginx.ingress.kubernetes.io/proxy-set-headers: "prod-staro-modular/custom-headers"
+    
+    # Security headers via server-snippet (if allowed) or via response
+    nginx.ingress.kubernetes.io/add-base-url: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - "*.ostechnologies.info"
+        - "ostechnologies.info"
+      secretName: wildcard-ostechnologies-tls
+  rules:
+    # =========================================================
+    # Platform Admin / Landing Page
+    # =========================================================
+    - host: ostechnologies.info
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /media
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /swagger
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /redoc
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: staro-modular
+                port:
+                  number: 80
+    
+    # =========================================================
+    # Tenant Subdomains (wildcard)
+    # =========================================================
+    - host: "*.ostechnologies.info"
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /media
+            pathType: Prefix
+            backend:
+              service:
+                name: django-api
+                port:
+                  number: 8000
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: staro-modular
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: staro-modular
+                port:
+                  number: 80
+
+---
+# ConfigMap for custom headers (used by proxy-set-headers annotation)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-headers
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+data:
+  # These headers are passed to backend
+  X-Forwarded-Host: "$host"
+  X-Original-Host: "$host"
+  X-Real-IP: "$remote_addr"
+  X-Forwarded-For: "$proxy_add_x_forwarded_for"
+  X-Forwarded-Proto: "$scheme"
+
+---
+# Cross-namespace backend bridge service
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-api
+  namespace: prod-staro-modular
+  labels:
+    app: django-api-bridge
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: ingress
+spec:
+  type: ExternalName
+  externalName: django-api.prod-backend.svc.cluster.local
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

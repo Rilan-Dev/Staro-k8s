@@ -1,0 +1,18 @@
+# =====================================================
+# LOCAL STORAGE CLASS
+# For bare-metal/on-premise Kubernetes clusters
+# =====================================================
+# WaitForFirstConsumer ensures pods are scheduled before
+# PV binding, enabling proper node affinity matching.
+# =====================================================
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain

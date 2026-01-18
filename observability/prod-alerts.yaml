@@ -1,0 +1,135 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: prod-alerts
+  namespace: observability
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+
+  - name: node-health
+    rules:
+
+    - alert: NodeCPUHigh
+      expr: |
+        100 - avg by (instance) (
+          rate(node_cpu_seconds_total{mode="idle"}[5m])
+        ) * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage on {{ $labels.instance }}"
+        description: "CPU usage has been above 80% for 5 minutes"
+
+    - alert: NodeCPUCritical
+      expr: |
+        100 - avg by (instance) (
+          rate(node_cpu_seconds_total{mode="idle"}[5m])
+        ) * 100 > 95
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "CRITICAL CPU usage on {{ $labels.instance }}"
+        description: "CPU usage has been above 95% for 2 minutes"
+
+    - alert: NodeMemoryHigh
+      expr: |
+        (node_memory_MemAvailable_bytes
+        / node_memory_MemTotal_bytes) < 0.15
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Low memory on {{ $labels.instance }}"
+        description: "Available memory is below 15%"
+
+    - alert: NodeDiskAlmostFull
+      expr: |
+        (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+        / node_filesystem_size_bytes) < 0.10
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Disk almost full on {{ $labels.instance }}"
+        description: "Less than 10% disk space remaining"
+
+  - name: kubernetes-workloads
+    rules:
+
+    - alert: NodeDown
+      expr: up{job="node-exporter"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Node {{ $labels.instance }} is down"
+        description: "Node has been unreachable for more than 1 minute"
+
+    - alert: TargetDown
+      expr: up == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Target {{ $labels.job }} is down"
+        description: "Target {{ $labels.instance }} has been unreachable for more than 1 minute"
+
+    - alert: PodCrashLooping
+      expr: |
+        rate(kube_pod_container_status_restarts_total[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod crash looping"
+        description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is restarting frequently"
+
+    - alert: DeploymentUnavailable
+      expr: |
+        kube_deployment_status_replicas_available
+        < kube_deployment_spec_replicas
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Deployment unavailable"
+        description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas"
+
+  - name: storage
+    rules:
+
+    - alert: PersistentVolumeAlmostFull
+      expr: |
+        (kubelet_volume_stats_available_bytes
+        / kubelet_volume_stats_capacity_bytes) < 0.10
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        summary: "PVC almost full"
+        description: "PVC {{ $labels.persistentvolumeclaim }} has less than 10% free space"
+
+
+    - alert: ManualTelegramTest
+      expr: vector(1)
+      for: 30s
+      labels:
+        severity: info
+      annotations:
+        summary: "Telegram test alert"
+        description: "This is a controlled test"
+
+
+    - alert: KubePodCrashLooping
+      expr: |
+        increase(kube_pod_container_status_restarts_total[5m]) > 3
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod crash looping ({{ $labels.namespace }}/{{ $labels.pod }})"
+        description: "Pod restarted more than 3 times in the last 5 minutes"

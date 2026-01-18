@@ -1,0 +1,95 @@
+# =====================================================
+# POSTGRESQL PERSISTENT VOLUMES
+# Configured for your actual cluster nodes
+# =====================================================
+# Workers with nodepool=workers label:
+# - wd10318023672batchahajagmailcoma0uqu (10.200.0.12)
+# - wd180188231138batchahajagmailcom59nbe (10.200.0.13)
+# =====================================================
+
+---
+# PV for VPS worker 1 (wd103)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv-worker1
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+    type: local
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /var/lib/k8s-pv/postgres
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - wd10318023672batchahajagmailcoma0uqu
+
+---
+# PV for VPS worker 2 (wd180) - for HA failover
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv-worker2
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+    type: local
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /var/lib/k8s-pv/postgres
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - wd180188231138batchahajagmailcom59nbe
+
+---
+# PV for Redis persistence (optional, for Celery result backend)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redis-pv-worker1
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: cache
+    type: local
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /var/lib/k8s-pv/redis
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - wd10318023672batchahajagmailcoma0uqu

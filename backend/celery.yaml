@@ -1,0 +1,262 @@
+# =====================================================
+# CELERY WORKERS AND BEAT SCHEDULER
+# Async task processing for multi-tenant workloads
+# =====================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery
+  namespace: prod-backend
+  labels:
+    app: celery
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: celery
+  template:
+    metadata:
+      labels:
+        app: celery
+        app.kubernetes.io/name: staro-modular
+        app.kubernetes.io/component: worker
+    spec:
+      nodeSelector:
+        nodepool: workers
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: celery
+      imagePullSecrets:
+        - name: ghcr-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        # Wait for Redis to be ready
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Redis..."
+              until nc -z redis.prod-backend.svc.cluster.local 6379; do
+                echo "Redis not ready, waiting..."
+                sleep 2
+              done
+              echo "Redis is ready!"
+        # Wait for Django API (ensures migrations are done)
+        - name: wait-for-django
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Django API..."
+              until nc -z django-api.prod-backend.svc.cluster.local 8000; do
+                echo "Django API not ready, waiting..."
+                sleep 3
+              done
+              echo "Django API is ready!"
+      containers:
+        - name: celery
+          image: ghcr.io/rilan-dev/staro_modular-api:Migrate_to_Product
+          imagePullPolicy: Always
+          workingDir: /app
+          command:
+            - bash
+            - -lc
+            - |
+              set -e
+              celery -A staro_modular worker \
+                --loglevel=info \
+                --concurrency=4 \
+                --max-tasks-per-child=1000 \
+                --prefetch-multiplier=2 \
+                -Q celery,default,high_priority,low_priority
+          envFrom:
+            - secretRef:
+                name: django-secrets
+            - configMapRef:
+                name: django-config
+          env:
+            # Django settings module (prod.py, not production.py)
+            - name: DJANGO_SETTINGS_MODULE
+              value: "staro_modular.settings.prod"
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@pgbouncer.prod-database.svc.cluster.local:5432/postgres"
+            - name: CELERY_BROKER_URL
+              value: "redis://redis.prod-backend.svc.cluster.local:6379/0"
+            - name: CELERY_RESULT_BACKEND
+              value: "redis://redis.prod-backend.svc.cluster.local:6379/1"
+            - name: REDIS_URL
+              value: "redis://redis.prod-backend.svc.cluster.local:6379/0"
+            - name: C_FORCE_ROOT
+              value: "false"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - celery -A staro_modular inspect ping -d celery@$HOSTNAME
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+---
+# Celery Beat Scheduler (singleton)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: prod-backend
+  labels:
+    app: celery-beat
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: scheduler
+spec:
+  # IMPORTANT: Beat must be exactly 1 replica to avoid duplicate scheduled tasks
+  replicas: 1
+  strategy:
+    type: Recreate  # No rolling update - only one beat at a time
+  selector:
+    matchLabels:
+      app: celery-beat
+  template:
+    metadata:
+      labels:
+        app: celery-beat
+        app.kubernetes.io/name: staro-modular
+        app.kubernetes.io/component: scheduler
+    spec:
+      nodeSelector:
+        nodepool: workers
+      imagePullSecrets:
+        - name: ghcr-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z redis.prod-backend.svc.cluster.local 6379; do
+                sleep 2
+              done
+        - name: wait-for-django
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z django-api.prod-backend.svc.cluster.local 8000; do
+                sleep 3
+              done
+      containers:
+        - name: celery-beat
+          image: ghcr.io/rilan-dev/staro_modular-api:Migrate_to_Product
+          imagePullPolicy: Always
+          workingDir: /app
+          command:
+            - bash
+            - -lc
+            - |
+              set -e
+              # Using file-based scheduler (django-celery-beat not installed in image)
+              celery -A staro_modular beat \
+                --loglevel=info \
+                --schedule=/tmp/celerybeat-schedule
+          envFrom:
+            - secretRef:
+                name: django-secrets
+            - configMapRef:
+                name: django-config
+          env:
+            # Django settings module (prod.py, not production.py)
+            - name: DJANGO_SETTINGS_MODULE
+              value: "staro_modular.settings.prod"
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@pgbouncer.prod-database.svc.cluster.local:5432/postgres"
+            - name: CELERY_BROKER_URL
+              value: "redis://redis.prod-backend.svc.cluster.local:6379/0"
+            - name: CELERY_RESULT_BACKEND
+              value: "redis://redis.prod-backend.svc.cluster.local:6379/1"
+            - name: REDIS_URL
+              value: "redis://redis.prod-backend.svc.cluster.local:6379/0"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+---
+# HPA for Celery workers (scale based on queue length via custom metrics, or CPU)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: celery
+  namespace: prod-backend
+  labels:
+    app: celery
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: celery
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

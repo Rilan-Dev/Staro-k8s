@@ -1,0 +1,289 @@
+# =====================================================
+# PROMETHEUS STACK HELM VALUES
+# Production configuration for kube-prometheus-stack
+# =====================================================
+# Installation:
+# helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+# helm repo update
+# helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#   -n observability --create-namespace -f prometheus-values.yaml
+# =====================================================
+
+
+# Global settings
+defaultRules:
+  create: true
+  rules:
+    alertmanager: true
+    etcd: true
+    configReloaders: true
+    general: true
+    k8s: true
+    kubeApiserverAvailability: true
+    kubeApiserverSlos: true
+    kubePrometheusGeneral: true
+    kubePrometheusNodeRecording: true
+    kubernetesApps: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    node: true
+    nodeExporterAlerting: true
+    nodeExporterRecording: true
+    prometheus: true
+    prometheusOperator: true
+
+
+# Alertmanager configuration
+alertmanager:
+  enabled: true
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - alertmanager.ostechnologies.info
+    tls:
+      - secretName: alertmanager-tls
+        hosts:
+          - alertmanager.ostechnologies.info
+
+  alertmanagerSpec:
+    replicas: 1
+    retention: 120h
+
+    secrets:
+      - alertmanager-relay-secret
+
+  config:
+    global:
+      resolve_timeout: 5m
+
+    route:
+      receiver: telegram-warning
+      group_by: ['alertname', 'namespace', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+
+      routes:
+        - matchers:
+            - severity="critical"
+          receiver: telegram-critical
+
+        - matchers:
+            - severity="warning"
+          receiver: telegram-warning
+
+    receivers:
+      - name: telegram-warning
+        webhook_configs:
+          - url: http://notification-relay.observability.svc.cluster.local:8080/alerts
+            send_resolved: true
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alertmanager/secrets/alertmanager-relay-secret/bearer-token
+
+      - name: telegram-critical
+        webhook_configs:
+          - url: http://notification-relay.observability.svc.cluster.local:8080/alerts
+            send_resolved: true
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alertmanager/secrets/alertmanager-relay-secret/bearer-token
+
+
+# # Alertmanager configuration
+# alertmanager:
+#   enabled: true
+#   ingress:
+#     enabled: true
+#     ingressClassName: nginx
+#     hosts:
+#       - alertmanager.ostechnologies.info
+#     tls:
+#       - secretName: alertmanager-tls
+#         hosts:
+#           - alertmanager.ostechnologies.info
+#   alertmanagerSpec:
+#     replicas: 1
+#     retention: 120h
+#     storage: {}
+#     resources:
+#       requests:
+#         cpu: 50m
+#         memory: 128Mi
+#       limits:
+#         cpu: 500m
+#         memory: 512Mi
+#   config:
+#     global:
+#       resolve_timeout: 5m
+#       slack_api_url: 'https://hooks.slack.com/services/REPLACE_WITH_WEBHOOK'
+#     route:
+#       group_by: ['alertname', 'namespace', 'severity']
+#       group_wait: 30s
+#       group_interval: 5m
+#       repeat_interval: 4h
+#       receiver: 'slack-notifications'
+#       routes:
+#         - match:
+#             severity: critical
+#           receiver: 'slack-critical'
+#         - match:
+#             severity: warning
+#           receiver: 'slack-warnings'
+#     receivers:
+#       - name: 'slack-notifications'
+#         slack_configs:
+#           - channel: '#staro-alerts'
+#             send_resolved: true
+#       - name: 'slack-critical'
+#         slack_configs:
+#           - channel: '#staro-alerts-critical'
+#             send_resolved: true
+#       - name: 'slack-warnings'
+#         slack_configs:
+#           - channel: '#staro-alerts'
+#             send_resolved: true
+
+# Grafana configuration
+grafana:
+  enabled: true
+  admin:
+    existingSecret: grafana-admin-credentials
+    userKey: admin-user
+    passwordKey: admin-password
+  downloadDashboardsImage:
+    registry: quay.io
+    repository: curl/curl
+    tag: 8.9.1
+    sha: ""
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - grafana.ostechnologies.info
+    tls:
+      - secretName: grafana-tls
+        hosts:
+          - grafana.ostechnologies.info
+  persistence:
+    enabled: false
+    # type: pvc
+    # storageClassName: ""
+    # size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'staro-dashboards'
+          orgId: 1
+          folder: 'Staro Modular'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/staro
+  dashboards:
+    staro:
+      # Import community dashboards
+      django-dashboard:
+        gnetId: 17658
+        revision: 1
+        datasource: Prometheus
+      redis-dashboard:
+        gnetId: 11835
+        revision: 1
+        datasource: Prometheus
+      postgres-dashboard:
+        gnetId: 9628
+        revision: 7
+        datasource: Prometheus
+      celery-dashboard:
+        gnetId: 13978
+        revision: 1
+        datasource: Prometheus
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki:3100
+      access: proxy
+
+
+# Prometheus configuration
+prometheus:
+  enabled: true
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - prometheus.ostechnologies.info
+    tls:
+      - secretName: prometheus-tls
+        hosts:
+          - prometheus.ostechnologies.info
+  prometheusSpec:
+    replicas: 1
+    retention: 15d
+    retentionSize: "20GB"
+    scrapeInterval: 60s
+    evaluationInterval: 60s
+    storageSpec: {}
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 4Gi
+    # Relaxed probes to prevent timeout during startup
+    livenessProbe:
+      timeoutSeconds: 30
+      failureThreshold: 10
+      periodSeconds: 10
+    readinessProbe:
+      timeoutSeconds: 30
+      failureThreshold: 10
+      periodSeconds: 10
+    startupProbe:
+      timeoutSeconds: 30
+      failureThreshold: 60
+      periodSeconds: 10
+    # Service discovery for all namespaces
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+
+# Node exporter for node metrics
+nodeExporter:
+  enabled: true
+
+# Kube-state-metrics for Kubernetes metrics
+kubeStateMetrics:
+  enabled: true
+
+# Prometheus operator
+prometheusOperator:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

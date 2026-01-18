@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: instant-test
+  namespace: observability
+spec:
+  groups:
+  - name: test
+    rules:
+    - alert: InstantTelegramTest
+      expr: vector(1)
+      for: 10s
+      labels:
+        severity: critical
+      annotations:
+        summary: "🔥 Instant Telegram test"
+        description: "If you see this, Alertmanager → Telegram works"

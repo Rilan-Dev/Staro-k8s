@@ -1,0 +1,232 @@
+# =====================================================
+# DJANGO API BACKEND DEPLOYMENT
+# Production-grade Django API with Redis & Celery
+# =====================================================
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: django-api
+  namespace: prod-backend
+  labels:
+    app: django-api
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: backend
+spec:
+  selector:
+    app: django-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-api
+  namespace: prod-backend
+  labels:
+    app: django-api
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: django-api
+  template:
+    metadata:
+      labels:
+        app: django-api
+        app.kubernetes.io/name: staro-modular
+        app.kubernetes.io/component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: django-api
+      nodeSelector:
+        nodepool: workers
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: django-api
+      imagePullSecrets:
+        - name: ghcr-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        # Wait for PostgreSQL to be ready
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL..."
+              until nc -z pgbouncer.prod-database.svc.cluster.local 5432; do
+                echo "PostgreSQL not ready, waiting..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready!"
+      containers:
+        - name: django
+          image: ghcr.io/rilan-dev/staro_modular-api:Migrate_to_Product
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: django-secrets
+            - configMapRef:
+                name: django-config
+          env:
+            # Django settings module (prod.py, not production.py)
+            - name: DJANGO_SETTINGS_MODULE
+              value: "staro_modular.settings.prod"
+            # Override DATABASE_URL to use PgBouncer
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@pgbouncer.prod-database.svc.cluster.local:5432/postgres"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: localhost
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+            - name: static
+              mountPath: /app/staticfiles
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: media
+          emptyDir: {}
+        - name: static
+          emptyDir: {}
+
+---
+# Django configuration (non-sensitive)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: django-config
+  namespace: prod-backend
+  labels:
+    app: django-api
+data:
+  DEBUG: "False"
+  DJANGO_SETTINGS_MODULE: "staro_modular.settings.production"
+  ALLOWED_HOSTS: "ostechnologies.info,*.ostechnologies.info,localhost"
+  CORS_ALLOW_ALL_ORIGINS: "False"
+  USE_S3_STORAGE: "False"
+  TIME_ZONE: "Asia/Dubai"
+
+---
+# Horizontal Pod Autoscaler for Django API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: django-api
+  namespace: prod-backend
+  labels:
+    app: django-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: django-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+
+---
+# Pod Disruption Budget for Django API
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: django-api
+  namespace: prod-backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: django-api

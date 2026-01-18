@@ -1,0 +1,256 @@
+# =====================================================
+# RESOURCE QUOTAS & LIMIT RANGES
+# Subscription-based resource allocation per tenant tier
+# =====================================================
+# Strategy:
+# - Namespace-level quotas for shared infrastructure
+# - Subscription-based soft limits enforced by Django
+# - Hard limits prevent runaway resource consumption
+# =====================================================
+
+---
+# =========================================================
+# PROD-BACKEND NAMESPACE - Backend Resource Quota
+# =========================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: backend-quota
+  namespace: prod-backend
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "16"
+    requests.memory: 32Gi
+    limits.cpu: "32"
+    limits.memory: 64Gi
+    
+    # Object counts
+    pods: "100"
+    services: "30"
+    secrets: "50"
+    configmaps: "30"
+    persistentvolumeclaims: "20"
+    
+    # Replication controllers and deployments
+    count/deployments.apps: "20"
+    count/replicasets.apps: "50"
+    count/statefulsets.apps: "10"
+    count/jobs.batch: "30"
+    count/cronjobs.batch: "10"
+
+---
+# Default limits for pods in backend namespace
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: backend-limits
+  namespace: prod-backend
+  labels:
+    app.kubernetes.io/name: staro-modular
+spec:
+  limits:
+    # Container defaults
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+      max:
+        cpu: "4"
+        memory: 8Gi
+      min:
+        cpu: 10m
+        memory: 32Mi
+    
+    # Pod defaults
+    - type: Pod
+      max:
+        cpu: "8"
+        memory: 16Gi
+    
+    # PVC defaults
+    - type: PersistentVolumeClaim
+      max:
+        storage: 100Gi
+      min:
+        storage: 1Gi
+
+---
+# =========================================================
+# PROD-STARO-MODULAR NAMESPACE - Frontend Resource Quota
+# =========================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: frontend-quota
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    
+    # Object counts
+    pods: "50"
+    services: "20"
+    secrets: "30"
+    configmaps: "20"
+    
+    # Deployments
+    count/deployments.apps: "15"
+    count/replicasets.apps: "30"
+
+---
+# Default limits for pods in frontend namespace
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: frontend-limits
+  namespace: prod-staro-modular
+  labels:
+    app.kubernetes.io/name: staro-modular
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 200m
+        memory: 256Mi
+      defaultRequest:
+        cpu: 50m
+        memory: 128Mi
+      max:
+        cpu: "2"
+        memory: 2Gi
+      min:
+        cpu: 10m
+        memory: 32Mi
+
+---
+# =========================================================
+# PROD-DATABASE NAMESPACE - Database Resource Quota
+# =========================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: database-quota
+  namespace: prod-database
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    # Tighter limits for database namespace (critical workloads)
+    requests.cpu: "8"
+    requests.memory: 32Gi
+    limits.cpu: "16"
+    limits.memory: 64Gi
+    
+    # Limited pod count (PostgreSQL + PgBouncer only)
+    pods: "20"
+    services: "10"
+    secrets: "20"
+    persistentvolumeclaims: "10"
+    
+    # Limited deployment types
+    count/statefulsets.apps: "5"
+    count/deployments.apps: "5"
+
+---
+# Default limits for database pods
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: database-limits
+  namespace: prod-database
+  labels:
+    app.kubernetes.io/name: staro-modular
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "1"
+        memory: 2Gi
+      defaultRequest:
+        cpu: 250m
+        memory: 512Mi
+      max:
+        cpu: "4"
+        memory: 16Gi
+      min:
+        cpu: 50m
+        memory: 64Mi
+    
+    - type: PersistentVolumeClaim
+      max:
+        storage: 500Gi
+      min:
+        storage: 10Gi
+
+---
+# =========================================================
+# OBSERVABILITY NAMESPACE - Monitoring Resource Quota
+# =========================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: observability-quota
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 32Gi
+    limits.cpu: "16"
+    limits.memory: 64Gi
+    pods: "50"
+    services: "20"
+    persistentvolumeclaims: "20"
+
+---
+# =========================================================
+# SUBSCRIPTION TIER LIMITS (Reference)
+# These are enforced at the Django application level
+# =========================================================
+# Tier: STARTER
+# - Max Products: 100
+# - Max Staff: 3
+# - Max Categories: 10
+# - API Rate Limit: 1000/day
+# - Custom Domain: No
+# - White Label: No
+
+# Tier: PROFESSIONAL
+# - Max Products: 1000
+# - Max Staff: 10
+# - Max Categories: 50
+# - API Rate Limit: 10000/day
+# - Custom Domain: Yes
+# - White Label: No
+
+# Tier: ENTERPRISE
+# - Max Products: Unlimited
+# - Max Staff: Unlimited
+# - Max Categories: Unlimited
+# - API Rate Limit: Unlimited
+# - Custom Domain: Yes
+# - White Label: Yes
+# - Dedicated Support
+# - SLA: 99.9%
+
+# Tier: CUSTOM
+# - Negotiated limits
+# - Namespace isolation (Option B)
+# - Dedicated database (Option C)

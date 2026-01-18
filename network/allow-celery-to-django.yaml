@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-celery-to-django
+  namespace: prod-backend
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["celery", "celery-beat", "celery-home"]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: django-api
+      ports:
+        - protocol: TCP
+          port: 8000

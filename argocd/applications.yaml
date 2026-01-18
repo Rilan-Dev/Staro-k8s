@@ -1,0 +1,310 @@
+# =====================================================
+# ARGOCD APPLICATION DEFINITIONS
+# GitOps-based deployment for Staro Modular Platform
+# =====================================================
+# Prerequisites:
+# 1. ArgoCD installed: kubectl create namespace argocd && kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# 2. Repository added: argocd repo add https://github.com/Rilan-Dev/staro_modular-API.git
+# =====================================================
+
+---
+# ArgoCD Project for Staro Modular
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: staro-modular
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+spec:
+  description: "Staro Modular Multi-Tenant SaaS Platform"
+  
+  # Source repositories
+  sourceRepos:
+    - "https://github.com/Rilan-Dev/staro_modular-API.git"
+    - "https://github.com/Rilan-Dev/staro-modular.git"
+  
+  # Allowed destination clusters and namespaces
+  destinations:
+    - namespace: prod-backend
+      server: https://kubernetes.default.svc
+    - namespace: prod-staro-modular
+      server: https://kubernetes.default.svc
+    - namespace: prod-database
+      server: https://kubernetes.default.svc
+    - namespace: observability
+      server: https://kubernetes.default.svc
+    - namespace: tenant-system
+      server: https://kubernetes.default.svc
+    - namespace: kube-system
+      server: https://kubernetes.default.svc
+  
+  # Cluster resources that are allowed to be managed
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: storage.k8s.io
+      kind: StorageClass
+    - group: cert-manager.io
+      kind: ClusterIssuer
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+  
+  # Namespace resources that are allowed
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  
+  # Roles for project access
+  roles:
+    - name: admin
+      description: "Full access to all resources"
+      policies:
+        - p, proj:staro-modular:admin, applications, *, staro-modular/*, allow
+      groups:
+        - staro-admins
+    
+    - name: developer
+      description: "Read-only access, can sync apps"
+      policies:
+        - p, proj:staro-modular:developer, applications, get, staro-modular/*, allow
+        - p, proj:staro-modular:developer, applications, sync, staro-modular/*, allow
+      groups:
+        - staro-developers
+
+---
+# Main Infrastructure Application (namespaces, storage, network policies)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staro-infrastructure
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: infrastructure
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: staro-modular
+  source:
+    repoURL: https://github.com/Rilan-Dev/staro_modular-API.git
+    targetRevision: main
+    path: k8s
+    directory:
+      recurse: true
+      exclude: |
+        observability/*
+        argocd/*
+        scripts/*
+        secrets/*
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: false  # Safety: don't auto-delete resources
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  revisionHistoryLimit: 10
+  ignoreDifferences:
+    # Ignore dynamically generated fields
+    - group: "*"
+      kind: "*"
+      jsonPointers:
+        - /metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+---
+# Database Application (PostgreSQL, PgBouncer)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staro-database
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: staro-modular
+  source:
+    repoURL: https://github.com/Rilan-Dev/staro_modular-API.git
+    targetRevision: main
+    path: k8s/database
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod-database
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates
+
+---
+# Backend Application (Django, Celery, Redis)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staro-backend
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: backend
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: staro-modular
+  source:
+    repoURL: https://github.com/Rilan-Dev/staro_modular-API.git
+    targetRevision: main
+    path: k8s/backend
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod-backend
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /status
+
+---
+# Frontend Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staro-frontend
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: frontend
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: staro-modular
+  source:
+    repoURL: https://github.com/Rilan-Dev/staro_modular-API.git
+    targetRevision: main
+    path: k8s/frontend
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod-staro-modular
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+---
+# Ingress Application (ingress rules, certificates)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staro-ingress
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: ingress
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: staro-modular
+  source:
+    repoURL: https://github.com/Rilan-Dev/staro_modular-API.git
+    targetRevision: main
+    path: k8s/ingress
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod-staro-modular
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+---
+# Observability Application (Prometheus, Loki, Grafana)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staro-observability
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: staro-modular
+  source:
+    repoURL: https://github.com/Rilan-Dev/staro_modular-API.git
+    targetRevision: main
+    path: k8s/observability
+    directory:
+      exclude: "*-values.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

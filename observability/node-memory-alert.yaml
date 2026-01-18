@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: test-alerts
+  namespace: observability
+spec:
+  groups:
+    - name: node.rules
+      rules:
+        - alert: NodeMemoryHigh
+          expr: node_memory_Active_bytes / node_memory_MemTotal_bytes * 100 > 90
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node memory usage is above 90%"

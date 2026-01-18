@@ -1,0 +1,220 @@
+# =====================================================
+# PGBOUNCER CONNECTION POOLER
+# Production-grade connection pooling for multi-tenant
+# =====================================================
+# Using CloudNativePG PgBouncer image (free, maintained)
+# PgBouncer sits between Django and PostgreSQL to:
+# - Reduce connection overhead
+# - Handle connection limits gracefully
+# - Support 100s of concurrent tenants efficiently
+# =====================================================
+
+---
+# PgBouncer configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbouncer-config
+  namespace: prod-database
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+data:
+  pgbouncer.ini: |
+    [databases]
+    * = host=postgres.prod-database.svc.cluster.local port=5432
+    
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 5432
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer/auth/userlist.txt
+    pool_mode = transaction
+    max_client_conn = 2000
+    default_pool_size = 25
+    min_pool_size = 5
+    reserve_pool_size = 10
+    max_db_connections = 200
+    server_lifetime = 3600
+    server_idle_timeout = 600
+    server_connect_timeout = 15
+    query_timeout = 120
+    query_wait_timeout = 120
+    log_connections = 1
+    log_disconnections = 1
+    stats_period = 60
+    admin_users = postgres
+    ignore_startup_parameters = extra_float_digits
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: prod-database
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: pgbouncer
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+        app.kubernetes.io/name: staro-modular
+        app.kubernetes.io/component: database
+    spec:
+      nodeSelector:
+        nodepool: workers
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: pgbouncer
+      initContainers:
+        # Generate userlist.txt from secret with proper MD5 hash
+        - name: init-auth
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Properly quote the password to handle special characters like #
+              PASSWORD="${POSTGRES_PASSWORD}"
+              USERNAME="postgres"
+              # For scram-sha-256, store plaintext password (PgBouncer handles hashing)
+              # Write userlist.txt in PgBouncer format - make world readable (644)
+              printf '"%s" "%s"\n' "$USERNAME" "$PASSWORD" > /auth/userlist.txt
+              chmod 644 /auth/userlist.txt
+              echo "Generated userlist.txt with permissions:"
+              ls -la /auth/
+              cat /auth/userlist.txt
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: auth-runtime
+              mountPath: /auth
+      containers:
+        - name: pgbouncer
+          # CloudNativePG PgBouncer image (free, actively maintained)
+          image: ghcr.io/cloudnative-pg/pgbouncer:1.22.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: pgbouncer
+              containerPort: 5432
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pgbouncer/pgbouncer.ini
+              subPath: pgbouncer.ini
+              readOnly: true
+            - name: auth-runtime
+              mountPath: /etc/pgbouncer/auth
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+        - name: pgbouncer-exporter
+          image: jbub/pgbouncer_exporter:v0.6.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 9127
+          env:
+            - name: PGBOUNCER_PORT
+              value: "5432"
+            - name: PGBOUNCER_USER
+              value: "postgres"
+            - name: PGBOUNCER_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGPASSWORD
+              value: "$(PGBOUNCER_PASS)"
+            - name: DATABASE_URL
+              value: "postgres://postgres@localhost:5432/pgbouncer?sslmode=disable"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: pgbouncer-config
+        - name: auth-runtime
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: prod-database
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: database
+spec:
+  selector:
+    app: pgbouncer
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+    - name: metrics
+      port: 9127
+      targetPort: 9127
+      protocol: TCP
+  type: ClusterIP
+
+---
+# Pod Disruption Budget for PgBouncer HA
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgbouncer
+  namespace: prod-database
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: pgbouncer

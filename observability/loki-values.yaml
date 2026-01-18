@@ -1,0 +1,210 @@
+# =====================================================
+# LOKI STACK HELM VALUES
+# Tenant-aware logging with Promtail
+# =====================================================
+# Installation:
+# helm repo add grafana https://grafana.github.io/helm-charts
+# helm repo update
+# helm install loki grafana/loki-stack -n observability -f loki-values.yaml
+# =====================================================
+
+# Loki configuration
+  enabled: true
+  isDefault: false
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClassName: local-storage
+    size: 50Gi
+  config:
+    auth_enabled: false
+    
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9095
+    
+    ingester:
+      lifecycler:
+        ring:
+          kvstore:
+            store: inmemory
+          replication_factor: 1
+        final_sleep: 0s
+      chunk_idle_period: 5m
+      chunk_retain_period: 30s
+      max_transfer_retries: 0
+    
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/index
+        cache_location: /data/loki/index_cache
+        shared_store: filesystem
+      filesystem:
+        directory: /data/loki/chunks
+    
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h  # 7 days
+      max_entries_limit_per_query: 5000
+      ingestion_rate_mb: 10
+      ingestion_burst_size_mb: 20
+    
+    chunk_store_config:
+      max_look_back_period: 168h  # 7 days
+    
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 168h  # 7 days
+    
+    compactor:
+      working_directory: /data/loki/compactor
+      shared_store: filesystem
+  
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1
+      memory: 2Gi
+
+# Promtail configuration (log collector)
+promtail:
+  enabled: true
+  config:
+    serverPort: 3101
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    
+    snippets:
+      pipelineStages:
+        # Parse Docker logs
+        - docker: {}
+        
+        # Extract tenant_id from log messages if present
+        - regex:
+            expression: '.*tenant_id[=:](?P<tenant_id>[a-f0-9-]+).*'
+        
+        # Extract namespace
+        - regex:
+            expression: '.*namespace[=:](?P<namespace>[a-zA-Z0-9-]+).*'
+        
+        # Add tenant_id as a label if found
+        - labels:
+            tenant_id:
+            namespace:
+        
+        # Parse JSON logs
+        - json:
+            expressions:
+              level: level
+              message: message
+              tenant_id: tenant_id
+              user_id: user_id
+              request_id: request_id
+        
+        # Add extracted values as labels
+        - labels:
+            level:
+            tenant_id:
+            user_id:
+        
+        # Output line is the message field
+        - output:
+            source: message
+      
+      # Multiline logs (for stack traces)
+      multiline:
+        firstline: '^\d{4}-\d{2}-\d{2}'
+        max_wait_time: 3s
+    
+    positions:
+      filename: /run/promtail/positions.yaml
+    
+    scrapeConfigs:
+      # Kubernetes pod logs
+      - job_name: kubernetes-pods
+        pipeline_stages:
+          - docker: {}
+          - regex:
+              expression: '.*tenant_id[=:](?P<tenant_id>[a-f0-9-]+).*'
+          - regex:
+              expression: '.*namespace[=:](?P<namespace>[a-zA-Z0-9-]+).*'
+          - labels:
+              tenant_id:
+              namespace:
+          - json:
+              expressions:
+                level: level
+                message: message
+                tenant_id: tenant_id
+                user_id: user_id
+                request_id: request_id
+          - labels:
+              level:
+              tenant_id:
+              user_id:
+          - output:
+              source: message
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          # Only collect logs from production namespaces
+          - source_labels: [__meta_kubernetes_namespace]
+            regex: prod-.*|observability
+            action: keep
+          
+          # Pod name
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          
+          # Namespace
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          
+          # Container name
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          
+          # App label
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+          
+          # Component label
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            target_label: component
+          
+          # Node name
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          
+          # Log file path
+          - replacement: /var/log/pods/*$1/*.log
+            separator: /
+            source_labels:
+              - __meta_kubernetes_pod_uid
+              - __meta_kubernetes_pod_container_name
+            target_label: __path__
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Grafana (use existing from prometheus stack)
+grafana:
+  enabled: false

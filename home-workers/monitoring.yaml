@@ -1,0 +1,144 @@
+# =====================================================
+# MONITORING STACK FOR HOME WORKERS
+# Prometheus node exporter and log collector
+# =====================================================
+# Runs on home workers to monitor their health
+# even when not handling production traffic
+# =====================================================
+
+---
+# Namespace for home monitoring (separate from observability)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: home-monitoring
+  labels:
+    app.kubernetes.io/name: staro-modular
+    location: home
+
+---
+# Node Exporter DaemonSet for home workers
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: home-monitoring
+  labels:
+    app: node-exporter
+    app.kubernetes.io/name: staro-modular
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      # Only run on home workers
+      nodeSelector:
+        location: home
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:v1.7.0
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+            - --collector.netclass.ignored-devices=^(veth.*)$
+          ports:
+            - containerPort: 9100
+              hostPort: 9100
+              name: metrics
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host/root
+              mountPropagation: HostToContainer
+              readOnly: true
+          securityContext:
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 65534
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
+
+---
+# Service for scraping node-exporter metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter
+  namespace: home-monitoring
+  labels:
+    app: node-exporter
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9100"
+spec:
+  selector:
+    app: node-exporter
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+  clusterIP: None  # Headless service
+
+---
+# ServiceMonitor for Prometheus to scrape home worker metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: home-node-exporter
+  namespace: observability
+  labels:
+    app: node-exporter
+    location: home
+spec:
+  namespaceSelector:
+    matchNames:
+      - home-monitoring
+  selector:
+    matchLabels:
+      app: node-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: instance
+        - action: replace
+          targetLabel: location
+          replacement: home

@@ -1,0 +1,81 @@
+# =====================================================
+# DJANGO MIGRATION JOB
+# Run once before deployments to apply database migrations
+# =====================================================
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: django-migrate
+  namespace: prod-backend
+  labels:
+    app: django-migrate
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: django-migrate
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        nodepool: workers
+      imagePullSecrets:
+        - name: ghcr-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL..."
+              until nc -z pgbouncer.prod-database.svc.cluster.local 5432; do
+                echo "PostgreSQL not ready, waiting..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready!"
+      containers:
+        - name: migrate
+          image: ghcr.io/rilan-dev/staro_modular-api:Migrate_to_Product
+          imagePullPolicy: Always
+          workingDir: /app
+          command:
+            - bash
+            - -lc
+            - |
+              set -euo pipefail
+              echo "=== Starting Django Migrations ==="
+              
+              echo "1. Running migrate..."
+              python manage.py migrate --noinput
+              
+              echo "2. Collecting static files..."
+              python manage.py collectstatic --noinput || true
+              
+              echo "3. Ensuring default tenant exists..."
+              python manage.py ensure_default_tenant || true
+              
+              echo "=== Migrations completed successfully ==="
+          envFrom:
+            - secretRef:
+                name: django-secrets
+            - configMapRef:
+                name: django-config
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://postgres:$(POSTGRES_PASSWORD)@pgbouncer.prod-database.svc.cluster.local:5432/postgres"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

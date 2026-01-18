@@ -1,0 +1,182 @@
+# =====================================================
+# STARO MODULAR FRONTEND DEPLOYMENT
+# React/Vite SPA with adaptive theming per tenant
+# =====================================================
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: staro-modular
+  namespace: prod-staro-modular
+  labels:
+    app: staro-modular
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: frontend
+spec:
+  selector:
+    app: staro-modular
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: staro-modular
+  namespace: prod-staro-modular
+  labels:
+    app: staro-modular
+    app.kubernetes.io/name: staro-modular
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: staro-modular
+  template:
+    metadata:
+      labels:
+        app: staro-modular
+        app.kubernetes.io/name: staro-modular
+        app.kubernetes.io/component: frontend
+    spec:
+      nodeSelector:
+        nodepool: workers
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: staro-modular
+      imagePullSecrets:
+        - name: ghcr-secret
+      # Note: Next.js container needs write access to /usr/src/app
+      # If your image supports non-root, uncomment the following
+      # securityContext:
+      #   runAsNonRoot: true
+      #   runAsUser: 1000
+      #   fsGroup: 1000
+      containers:
+        - name: staro-modular
+          image: ghcr.io/rilan-dev/staro-modular:Migrate-To-Product
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: staro-modular-env
+            - secretRef:
+                name: staro-frontend-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+---
+# Frontend configuration (non-sensitive)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: staro-modular-env
+  namespace: prod-staro-modular
+  labels:
+    app: staro-modular
+data:
+  VITE_BACKEND_PROVIDER: "django"
+  VITE_API_BASE_URL: "/api"
+  # Platform domain for multi-tenancy
+  VITE_PLATFORM_DOMAIN: "ostechnologies.info"
+
+---
+# Horizontal Pod Autoscaler for Frontend
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: staro-modular
+  namespace: prod-staro-modular
+  labels:
+    app: staro-modular
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: staro-modular
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+---
+# Pod Disruption Budget for Frontend
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: staro-modular
+  namespace: prod-staro-modular
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: staro-modular

@@ -1,0 +1,145 @@
+# =====================================================
+# EXTERNAL-DNS DEPLOYMENT
+# Automatic DNS record management for tenant domains
+# =====================================================
+# External-DNS watches Ingress resources and creates
+# DNS records automatically based on host rules.
+# =====================================================
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: external-dns
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: external-dns
+    app.kubernetes.io/component: dns
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-dns
+  labels:
+    app.kubernetes.io/name: external-dns
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: external-dns-viewer
+  labels:
+    app.kubernetes.io/name: external-dns
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: external-dns
+subjects:
+  - kind: ServiceAccount
+    name: external-dns
+    namespace: kube-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: external-dns
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: external-dns
+    app.kubernetes.io/component: dns
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: external-dns
+  template:
+    metadata:
+      labels:
+        app: external-dns
+        app.kubernetes.io/name: external-dns
+    spec:
+      serviceAccountName: external-dns
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: external-dns
+          image: registry.k8s.io/external-dns/external-dns:v0.14.0
+          args:
+            # Source of DNS records
+            - --source=ingress
+            - --source=service
+            
+            # DNS provider (Cloudflare)
+            - --provider=cloudflare
+            - --cloudflare-proxied  # Enable Cloudflare proxy (orange cloud)
+            
+            # Domain filter - only manage records for our domain
+            - --domain-filter=ostechnologies.info
+            
+            # Policy: sync = create, update, and delete records
+            # Use 'upsert-only' for safety during initial setup
+            - --policy=sync
+            
+            # Registry to track ownership of DNS records
+            - --registry=txt
+            - --txt-owner-id=staro-k8s-cluster
+            - --txt-prefix=externaldns-
+            
+            # Logging
+            - --log-level=info
+            - --log-format=text
+            
+            # Interval between sync runs
+            - --interval=1m
+          env:
+            - name: CF_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-api-token
+                  key: api-token
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+# ---
+# # Secret for Cloudflare API Token (create manually or via sealed-secrets)
+# # kubectl -n kube-system create secret generic cloudflare-api-token \
+# #   --from-literal=api-token=YOUR_CLOUDFLARE_API_TOKEN
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: cloudflare-api-token
+#   namespace: kube-system
+#   labels:
+#     app.kubernetes.io/name: external-dns
+# type: Opaque
+# stringData:
+#   # REPLACE THIS with your actual Cloudflare API token
+#   # Token needs Zone:DNS:Edit permission for ostechnologies.info
+#   api-token: "PLACEHOLDER_REPLACE_WITH_REAL_TOKEN"
