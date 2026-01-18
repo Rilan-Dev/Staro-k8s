@@ -104,7 +104,7 @@ spec:
                 name: django-api
                 port:
                   number: 8000
-          - path: /admin
+          - path: /django-admin
             pathType: Prefix
             backend:
               service:
@@ -153,7 +153,7 @@ spec:
                 name: django-api
                 port:
                   number: 8000
-          - path: /admin
+          - path: /django-admin
             pathType: Prefix
             backend:
               service:
