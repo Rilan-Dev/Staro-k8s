@@ -74,3 +74,4 @@
 # --from-literal=api-token="YOUR_CLOUDFLARE_API_TOKEN_HERE"
 #
 =====================================================
+# Staro-k8s
