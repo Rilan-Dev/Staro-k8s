@@ -61,10 +61,10 @@ alertmanager:
 
     route:
       receiver: telegram-warning
-      group_by: ['alertname', 'namespace', 'severity']
+      group_by: ['namespace', 'severity']
       group_wait: 30s
-      group_interval: 5m
-      repeat_interval: 4h
+      group_interval: 10m
+      repeat_interval: 12h
 
       routes:
         - matchers:
@@ -75,7 +75,17 @@ alertmanager:
             - severity="warning"
           receiver: telegram-warning
 
+        - matchers:
+            - severity="none"
+          receiver: "null"
+        
+        - matchers:
+            - alertname="Watchdog"
+          receiver: "null"
+
     receivers:
+      - name: "null"
+
       - name: telegram-warning
         webhook_configs:
           - url: http://notification-relay.observability.svc.cluster.local:8080/alerts
