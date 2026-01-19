@@ -30,17 +30,12 @@ def get_stats():
     prev_cpu = query_prom('avg(sum(rate(node_cpu_seconds_total{mode!="idle"}[24h] offset 1d)) by (instance)) * 100')
     prev_mem = query_prom('avg(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 offset 1d')
 
-    # Alert statistics (ALERTS metric is standard in Prometheus)
-    # Count how many times unique alerts fired in the last 24h
-    alert_count = query_prom('count(count_over_time(ALERTS{alertstate="firing"}[24h]))')
-    
     return {
         "cpu": cpu_usage,
         "mem": 100 - mem_usage, # Convert available to used
         "disk": 100 - disk_usage, # Convert available to used
         "prev_cpu": prev_cpu,
-        "prev_mem": 100 - prev_mem,
-        "alert_count": int(alert_count)
+        "prev_mem": 100 - prev_mem
     }
 
 def send_report(report):
@@ -65,8 +60,7 @@ def main():
         f"📊 **Daily System Report** ({datetime.now().strftime('%Y-%m-%d')})\n\n"
         f"**CPU Usage**: {stats['cpu']:.1f}% ({cpu_arrow} {abs(cpu_change):.1f}%)\n"
         f"**RAM Usage**: {stats['mem']:.1f}% ({mem_arrow} {abs(mem_change):.1f}%)\n"
-        f"**Disk Usage**: {stats['disk']:.1f}%\n"
-        f"**Alerts Fired**: {stats['alert_count']} (approx)\n\n"
+        f"**Disk Usage**: {stats['disk']:.1f}%\n\n"
         f"_Comparing last 24h vs previous day_"
     )
     

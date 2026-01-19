@@ -3,8 +3,6 @@ import os
 import httpx
 import asyncio
 import logging
-from datetime import datetime
-
 
 app = FastAPI()
 
@@ -34,33 +32,11 @@ async def receive_alert(req: Request, authorization: str = Header(None)):
 
     payload = await req.json()
     alerts = payload.get("alerts", [])
-    
-    if not alerts:
-        return {"status": "ok", "processed": 0}
 
-    # Group alerts by status
-    firing = []
-    resolved = []
+    failures = 0
 
     for alert in alerts:
-        status = alert.get("status", "firing")
-        if status == "firing":
-            firing.append(alert)
-        elif status == "resolved":
-            resolved.append(alert)
-
-    # Construct messages
-    messages_to_send = []
-
-    if firing:
-        messages_to_send.append(format_group("🔥 FIRING", firing))
-    
-    if resolved:
-        messages_to_send.append(format_group("✅ RESOLVED", resolved))
-
-    # Send messages
-    failures = 0
-    for msg in messages_to_send:
+        msg = format_alert(alert)
         success = await send_telegram_with_retry(msg)
         if not success:
             failures += 1
@@ -92,43 +68,14 @@ async def send_message(msg: Message, authorization: str = Header(None)):
     return {"status": "ok"}
 
 
-def format_group(header: str, alerts: list) -> str:
-    lines = [f"<b>{header} ({len(alerts)})</b>"]
-    
-    for alert in alerts:
-        labels = alert.get("labels", {})
-        annotations = alert.get("annotations", {})
-        
-        name = labels.get("alertname", "Unknown")
-        severity = labels.get("severity", "unknown")
-        namespace = labels.get("namespace", "unknown")
-        summary = annotations.get("summary") or annotations.get("message") or annotations.get("description") or "No description"
-        
-        # Icon based on severity
-        sev_icon = "🔴" if severity == "critical" else "⚠️"
-        
-        # Duration for resolved
-        duration_str = ""
-        if alert.get("status") == "resolved":
-            starts = alert.get("startsAt")
-            ends = alert.get("endsAt")
-            if starts and ends:
-                try:
-                    s_dt = datetime.fromisoformat(starts.replace("Z", "+00:00"))
-                    e_dt = datetime.fromisoformat(ends.replace("Z", "+00:00"))
-                    diff = e_dt - s_dt
-                    # simple format
-                    hours, remainder = divmod(int(diff.total_seconds()), 3600)
-                    minutes, _ = divmod(remainder, 60)
-                    duration_str = f" (Duration: {hours}h {minutes}m)"
-                except:
-                    pass
-        
-        lines.append(f"\n{sev_icon} <b>{name}</b> {duration_str}")
-        lines.append(f"Namespace: <code>{namespace}</code>")
-        lines.append(f"<i>{summary}</i>")
-
-    return "\n".join(lines)
+def format_alert(alert: dict) -> str:
+    return (
+        f"🚨 ALERT: {alert['labels'].get('alertname', 'Unknown')}\n"
+        f"Severity: {alert['labels'].get('severity', 'unknown')}\n"
+        f"Namespace: {alert['labels'].get('namespace', 'unknown')}\n\n"
+        f"{alert['annotations'].get('summary', '')}\n"
+        f"{alert['annotations'].get('description', '')}"
+    )
 
 
 async def send_telegram_with_retry(message: str) -> bool:
@@ -139,8 +86,7 @@ async def send_telegram_with_retry(message: str) -> bool:
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 response = await client.post(url, json={
                     "chat_id": TG_CHAT,
-                    "text": message,
-                    "parse_mode": "HTML"
+                    "text": message
                 })
 
             if response.status_code == 200:

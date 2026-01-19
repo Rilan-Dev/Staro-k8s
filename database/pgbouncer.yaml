@@ -74,18 +74,15 @@ spec:
         app.kubernetes.io/name: staro-modular
         app.kubernetes.io/component: database
     spec:
-      # Production-grade: Colocate with Postgres for minimum latency
-      affinity:
-        podAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  app: postgres
-              topologyKey: kubernetes.io/hostname
-              namespaces:
-                - prod-database
       nodeSelector:
-        location: vps
+        nodepool: workers
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: pgbouncer
       initContainers:
         # Generate userlist.txt from secret with proper MD5 hash
         - name: init-auth
